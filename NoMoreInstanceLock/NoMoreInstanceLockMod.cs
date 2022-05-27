@@ -1,34 +1,55 @@
-﻿using ExitGames.Client.Photon;
 using HarmonyLib;
 using MelonLoader;
-using NoMoreInstanceLock;
-using Photon.Realtime;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Reflection;
+using UnhollowerRuntimeLib.XrefScans;
 
-[assembly: MelonInfo(typeof(NoMoreInstanceLockMod), "No More Instance Lock", "1.0.0", "Majora")]
+[assembly: MelonInfo(typeof(NoMoreInstanceLockMod), "No More Instance Lock", "1.0.0", "Majora, Requi and Ben")]
 [assembly: MelonGame("VRChat", "VRChat")]
 [assembly: MelonColor(ConsoleColor.Green)]
 
-namespace NoMoreInstanceLock 
+namespace NoMoreInstanceLock
 {
     public class NoMoreInstanceLockMod : MelonMod
     {
+        private static PropertyInfo _settleStartTime;
+
+        private static MelonLogger.Instance _logger;
         public override void OnApplicationStart()
         {
-            HarmonyInstance.Patch(typeof(LoadBalancingClient).GetMethod(nameof(LoadBalancingClient.Method_Public_Virtual_New_Boolean_Byte_Object_RaiseEventOptions_SendOptions_0)), prefix: new HarmonyMethod(typeof(NoMoreInstanceLockMod).GetMethod("OpRaiseEvent", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)));
+            _logger = LoggerInstance;
+
+            foreach (var nestedType in typeof(VRCFlowManagerVRC).GetNestedTypes())
+            {
+                foreach (var methodInfo in nestedType.GetMethods())
+                {
+                    if (methodInfo.Name != "MoveNext") continue;
+
+                    if (XrefScanner.XrefScan(methodInfo)
+                        .Any(z => z.Type == XrefType.Global && z.ReadAsObject() != null && z.ReadAsObject().ToString() == "Executing Buffered Events"))
+                    {
+                        _settleStartTime = nestedType.GetProperty("field_Private_Single_0");
+
+                        HarmonyInstance.Patch(methodInfo, typeof(NoMoreInstanceLockMod).GetMethod(nameof(MoveNextPatch), BindingFlags.Static | BindingFlags.NonPublic).ToNewHarmonyMethod());
+                    }
+                }
+            }
         }
 
-        public static void OpRaiseEvent(byte __0, Il2CppSystem.Object __1, RaiseEventOptions __2, SendOptions __3) 
+        private static void MoveNextPatch(object __instance)
         {
-            if (__0 == 3)
+            if (__instance == null) return;
+            var eventReplicator = VRC_EventLog.field_Internal_Static_VRC_EventLog_0?.field_Internal_EventReplicator_0;
+
+            if (eventReplicator != null && !eventReplicator.field_Private_Boolean_0 && Time.realtimeSinceStartup - (float)_settleStartTime.GetValue(__instance) >= 10.0)
             {
-                VRC_EventLog.field_Internal_Static_VRC_EventLog_0.field_Internal_EventReplicator_0.field_Private_Boolean_0 = true;
+                eventReplicator.field_Private_Boolean_0 = true;
+                _logger.Msg(ConsoleColor.Yellow, "Network didn't settle, ignoring and joining anyways... (World may be broken!)");
             }
         }
     }
 }
-
